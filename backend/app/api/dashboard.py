@@ -18,6 +18,9 @@ logger = logging.getLogger("app.api.dashboard")
 
 router = APIRouter(prefix="/dashboard")
 
+# 流水线独立路由（架构第 4 节：/api/pipeline/*）
+pipeline_router = APIRouter(prefix="/pipeline")
+
 
 @router.get("/summary")
 async def summary(session: Session = Depends(get_session)) -> dict:
@@ -135,13 +138,13 @@ async def summary(session: Session = Depends(get_session)) -> dict:
     })
 
 
-@router.get("/pipeline/status")
+@pipeline_router.get("/status")
 async def pipeline_status(session: Session = Depends(get_session)) -> dict:
     """当前 PipelineRun 状态机（时间轴高亮数据源）。"""
     return ok(get_pipeline_status(session))
 
 
-@router.post("/pipeline/run")
+@pipeline_router.post("/run")
 async def pipeline_run(background: BackgroundTasks, session: Session = Depends(get_session)) -> dict:
     """手动触发当日流水线（后台异步执行，立即返回，前端轮询状态）。"""
     account_id = get_current_account_id(session)
@@ -154,7 +157,7 @@ async def pipeline_run(background: BackgroundTasks, session: Session = Depends(g
     return ok({"triggered": True}, "流水线已触发，请通过状态接口查看进度")
 
 
-@router.post("/pipeline/retry")
+@pipeline_router.post("/retry")
 async def pipeline_retry(background: BackgroundTasks, session: Session = Depends(get_session)) -> dict:
     """失败环节重试：重跑整条当日流水线（已成功环节幂等跳过/增量补齐）。"""
     account_id = get_current_account_id(session)
@@ -170,7 +173,7 @@ def _run_pipeline_bg(account_id: int) -> None:
     asyncio.run(run_daily_pipeline(account_id))
 
 
-@router.get("/pipeline/history")
+@pipeline_router.get("/history")
 async def pipeline_history(session: Session = Depends(get_session)) -> dict:
     """近 7 日流水线运行历史（G1 验收：连续 3 天跑通可观测）。"""
     account_id = get_current_account_id(session)

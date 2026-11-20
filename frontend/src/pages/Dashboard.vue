@@ -32,7 +32,7 @@ async function load() {
 async function triggerPipeline() {
   loading.value = true
   try {
-    await apiPost('/api/dashboard/pipeline/run')
+    await apiPost('/api/pipeline/run')
     setTimeout(load, 2000)
   } finally {
     loading.value = false

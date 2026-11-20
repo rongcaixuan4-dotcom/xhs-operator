@@ -150,9 +150,10 @@ def approve_draft(session: Session, draft_id: int) -> PublishTask:
     if draft is None:
         raise NotFoundError(f"二创稿不存在：{draft_id}")
     if draft.status not in ("pending_review", "approved", "rejected"):
-        return {"code": 1400, "data": None, "message": f"当前状态不可通过：{draft.status}"}  # type: ignore[return-value]
-    task = create_publish_task(session, draft)
-    return task
+        from ..errors import AppError
+
+        raise AppError(f"当前状态不可通过：{draft.status}")
+    return create_publish_task(session, draft)
 
 
 def reject_draft(session: Session, draft_id: int, reason: str) -> CreationDraft:

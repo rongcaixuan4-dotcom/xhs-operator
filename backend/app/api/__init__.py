@@ -16,7 +16,7 @@ from fastapi.responses import FileResponse
 
 from .collected import router as collected_router
 from .creations import router as creations_router
-from .dashboard import router as dashboard_router
+from .dashboard import pipeline_router, router as dashboard_router
 from .knowledge import router as knowledge_router
 from .personas import router as personas_router
 from .publish import router as publish_router
@@ -33,6 +33,7 @@ api_router = APIRouter(prefix="/api")
 
 # 各资源域路由（顺序即文档顺序）
 api_router.include_router(dashboard_router)
+api_router.include_router(pipeline_router)
 api_router.include_router(personas_router)
 api_router.include_router(knowledge_router)
 api_router.include_router(topics_router)
