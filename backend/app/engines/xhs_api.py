@@ -267,31 +267,57 @@ class XhsApiChannel:
             )
         return self._client
 
+    def _check_read_only(self, uri: str) -> None:
+        """只读白名单硬校验（显式抛错，不依赖 assert——python -O 下 assert 会被剥离）。
+
+        变更类（写）接口一律拒绝：写操作永久红线，只走 Playwright 真浏览器。
+        """
+        if uri not in READ_ENDPOINTS:
+            raise ApiChannelError(
+                f"非只读白名单接口，拒绝请求：{uri}（红线：变更类接口一律真浏览器）",
+                detail={"uri": uri},
+            )
+
     async def _get(self, uri: str, params: dict[str, Any]) -> dict:
         """签名 GET（uri 必须属于 READ_ENDPOINTS 白名单）。"""
         self.ensure_ready()
-        assert uri in READ_ENDPOINTS, f"非只读白名单接口，拒绝请求：{uri}"
+        self._check_read_only(uri)
         await self._limiter.wait()
         sign = self._signer.sign_headers_get(uri, self.cookie_str, params=params)
         url = _API_HOST + self._signer.build_url(uri, params)
         headers = {**self._base_headers, **sign, "Cookie": self.cookie_str}
         client = await self._ensure_client()
-        resp = await client.get(url, headers=headers)
+        try:
+            resp = await client.get(url, headers=headers)
+        except httpx.HTTPError as exc:
+            # 网络异常（超时/断连/DNS 失败）统一转译为 ApiChannelError：
+            # 保持错误可见语义，并让 hybrid 模式能捕获后自动回退浏览器通道
+            raise ApiChannelError(
+                f"网络异常（GET {uri}）：{type(exc).__name__} {exc}",
+                detail={"uri": uri, "error_type": type(exc).__name__},
+            ) from exc
         return self._unwrap(resp, uri)
 
     async def _post(self, uri: str, payload: dict[str, Any]) -> dict:
         """签名 POST（仅用于平台以 POST 承载的读接口，白名单校验）。"""
         self.ensure_ready()
-        assert uri in READ_ENDPOINTS, f"非只读白名单接口，拒绝请求：{uri}"
+        self._check_read_only(uri)
         await self._limiter.wait()
         sign = self._signer.sign_headers_post(uri, self.cookie_str, payload=payload)
         headers = {**self._base_headers, **sign, "Cookie": self.cookie_str}
         client = await self._ensure_client()
-        resp = await client.post(
-            _API_HOST + uri,
-            headers=headers,
-            json=payload,
-        )
+        try:
+            resp = await client.post(
+                _API_HOST + uri,
+                headers=headers,
+                json=payload,
+            )
+        except httpx.HTTPError as exc:
+            # 同 _get：网络异常转译，hybrid 降级可达
+            raise ApiChannelError(
+                f"网络异常（POST {uri}）：{type(exc).__name__} {exc}",
+                detail={"uri": uri, "error_type": type(exc).__name__},
+            ) from exc
         return self._unwrap(resp, uri)
 
     @staticmethod
