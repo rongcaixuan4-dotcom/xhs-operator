@@ -142,6 +142,35 @@ class BrowserManager:
         finally:
             self.release_page(page)
 
+    # ── 登录态 Cookie 导出（API 只读通道专用） ──
+    def export_login_state(self) -> tuple[str, str]:
+        """导出小红书 Cookie 串与 User-Agent（sync，须在线程中调用）。
+
+        只读导出 persistent context 的 Cookie（含 a1 / web_session），供签名直连
+        **只读** API 通道（engines/xhs_api.py）使用；本方法不做任何写操作，
+        导出的 Cookie 绝不用于变更类（写）接口——写操作一律真浏览器（红线）。
+
+        Returns:
+            (cookie_str, user_agent)。UA 获取失败时返回空串（调用方回退默认 UA）。
+        """
+        context = self._ensure_context()
+        page = context.new_page()
+        user_agent = ""
+        try:
+            page.goto(XHS_HOME, wait_until="domcontentloaded")
+            time.sleep(1)
+            user_agent = page.evaluate("navigator.userAgent") or ""
+        except Exception as exc:  # noqa: BLE001 - UA 拿不到不影响 Cookie 导出
+            logger.warning("UA 导出失败（回退默认 UA）：%s", exc)
+        finally:
+            self.release_page(page)
+        cookies = context.cookies("https://www.xiaohongshu.com")
+        cookie_str = "; ".join(
+            f"{c.get('name')}={c.get('value')}" for c in cookies if c.get("name")
+        )
+        logger.info("登录态 Cookie 导出完成：cookie 项数=%s", len(cookies))
+        return cookie_str, user_agent
+
     # ── 截图留痕 ──
     def screenshot(self, page, name: str) -> str:
         """截图存 data/screenshots/，返回 data/ 相对路径（供 PipelineRun.detail/前端查看）。"""
@@ -181,6 +210,11 @@ async def release_page(page) -> None:
 async def check_login_async() -> tuple[bool, str]:
     """异步登录态检查。"""
     return await asyncio.to_thread(get_browser_manager().check_login)
+
+
+async def export_login_state_async() -> tuple[str, str]:
+    """异步导出小红书 Cookie 串与 UA（API 只读通道专用）。"""
+    return await asyncio.to_thread(get_browser_manager().export_login_state)
 
 
 async def screenshot_async(page, name: str) -> str:

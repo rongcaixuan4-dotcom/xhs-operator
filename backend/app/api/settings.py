@@ -23,7 +23,10 @@ logger = logging.getLogger("app.api.settings")
 router = APIRouter(prefix="/settings")
 
 # AppSetting 中允许 API 修改的键白名单
-ALLOWED_APP_KEYS = {"review_required", "publish_slots", "daily_min_notes"}
+ALLOWED_APP_KEYS = {"review_required", "publish_slots", "daily_min_notes", "collect_read_mode"}
+
+# 采集读取通道合法取值（browser | api | hybrid）
+VALID_READ_MODES = ("browser", "api", "hybrid")
 
 # 连通性测试结果落库键（Dashboard 状态灯读取）
 AI_TEST_KEY = "ai_test_{kind}"
@@ -136,15 +139,17 @@ class AppSettingPayload(BaseModel):
     review_required: bool | None = None
     publish_slots: list[str] | None = None
     daily_min_notes: int | None = None
+    collect_read_mode: str | None = None
 
 
 @router.get("/app")
 async def get_app_settings(session: Session = Depends(get_session)) -> dict:
-    """读取应用设置（审核开关、发布时段、每日最少入选数）。"""
+    """读取应用设置（审核开关、发布时段、每日最少入选数、采集通道模式）。"""
     return ok({
         "review_required": get_app_setting(session, "review_required", True),
         "publish_slots": get_app_setting(session, "publish_slots", ["10:00", "15:00", "19:00"]),
         "daily_min_notes": get_app_setting(session, "daily_min_notes", 3),
+        "collect_read_mode": get_app_setting(session, "collect_read_mode", "hybrid"),
     })
 
 
@@ -161,8 +166,12 @@ async def put_app_settings(payload: AppSettingPayload, session: Session = Depend
         if payload.daily_min_notes < 1 or payload.daily_min_notes > 20:
             return fail(1400, "daily_min_notes 取值范围 1~20")
         set_app_setting(session, "daily_min_notes", payload.daily_min_notes)
+    if payload.collect_read_mode is not None:
+        if payload.collect_read_mode not in VALID_READ_MODES:
+            return fail(1400, "collect_read_mode 取值须为 browser | api | hybrid")
+        set_app_setting(session, "collect_read_mode", payload.collect_read_mode)
     logger.info(
-        "AppSetting 已更新：review_required=%s publish_slots=%s daily_min_notes=%s",
-        payload.review_required, payload.publish_slots, payload.daily_min_notes,
+        "AppSetting 已更新：review_required=%s publish_slots=%s daily_min_notes=%s collect_read_mode=%s",
+        payload.review_required, payload.publish_slots, payload.daily_min_notes, payload.collect_read_mode,
     )
     return ok(await get_app_settings(session), "设置已保存")

@@ -59,6 +59,8 @@ def _seed_defaults(engine) -> None:
         "daily_min_notes": 3,
         # 当前生效账号（MVP 单账号，D2）
         "current_account_id": 1,
+        # 采集读取通道：browser | api | hybrid（hybrid=API 优先、失败自动回退浏览器）
+        "collect_read_mode": "hybrid",
     }
     with Session(engine) as session:
         for key, value in default_settings.items():

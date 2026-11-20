@@ -37,3 +37,7 @@ browser:
 # ── 预留：P1 多账号（MVP 只用 account_1） ──
 accounts:
   current: 1               # 当前生效账号 id，同时写入 AppSetting.current_account_id
+
+# ── 应用设置初始默认值（运行后以 AppSetting 表 / 设置页 API 为准） ──
+app_settings:
+  collect_read_mode: "hybrid"   # 采集读取通道：browser=仅浏览器 | api=仅签名直连 | hybrid=API 优先、失败自动回退浏览器

@@ -1,29 +1,42 @@
 # -*- coding: utf-8 -*-
-"""采集引擎：打开搜索结果页解析列表项（图/题/文/作者/互动数），下载图片到本地。
+"""采集引擎：双通道采集（签名直连 API / Playwright 浏览器），下载图片到本地。
+
+通道模式（AppSetting.collect_read_mode：browser | api | hybrid，默认 hybrid）：
+- api：仅走签名直连只读接口（engines/xhs_api.py，签名由开源库 xhshow 提供）；
+- browser：仅走浏览器页面解析（原有路径）；
+- hybrid：API 优先，API 通道失败（无 Cookie/风控/网络）自动回退浏览器。
 
 流程（R06）：
-1. BrowserManager 租借页面 → 打开小红书搜索结果页（关键词）；
-2. 解析笔记卡片：note_id（href 提取）/ 封面图 / 标题 / 作者 / 互动数；
-3. 图片经 CDN URL 下载到 data/collected/（仅公开图片 URL，不涉及签名）；
-4. CollectedNote 入库（UNIQUE(account_id, xhs_note_id) 防重采，重复直接跳过）。
+1. 按通道获取搜索结果 → 解析笔记卡片：note_id / 封面图 / 标题 / 作者 / 互动数；
+2. 图片经 CDN URL 下载到 data/collected/（仅公开图片 URL）；
+3. CollectedNote 入库（UNIQUE(account_id, xhs_note_id) 防重采，重复直接跳过）。
 
-安全红线：只读页面 DOM 与公开图片 URL；绝不逆向签名、绝不 Cookie 直连。
+安全红线（全项目）：两通道均为只读；任何变更类（写）接口绝不经 API 直连，
+发布一律真浏览器；浏览器通道只读页面 DOM，不逆向签名。
 """
 from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import re
-from dataclasses import dataclass, field
 
 import httpx
 from sqlmodel import Session
 
 from ..config import get_settings
-from ..db import get_engine
+from ..db import get_app_setting, get_engine
 from ..errors import EngineError
 from ..models import CollectedNote, Topic
 from .browser import acquire_page, release_page, screenshot_async
+from .xhs_api import (
+    ApiChannelError,
+    DEFAULT_USER_AGENT,
+    ScrapedNote,
+    XhsApiChannel,
+    _parse_count,
+    fetch_login_state,
+)
 
 logger = logging.getLogger("app.engines.collect")
 
@@ -37,34 +50,13 @@ TITLE_SELECTOR = "a.title span, .title, a.title"
 AUTHOR_SELECTOR = ".author .name, .author-wrapper .name, .name"
 LIKE_SELECTOR = ".like-wrapper .count, .count"
 
-
-@dataclass
-class ScrapedNote:
-    """单条采集结果（解析产物）。"""
-
-    xhs_note_id: str = ""
-    title: str = ""
-    content: str = ""
-    author: str = ""
-    image_urls: list[str] = field(default_factory=list)
-    likes: int = 0
-    collects: int = 0
-    comments: int = 0
+VALID_READ_MODES = ("browser", "api", "hybrid")
 
 
-def _parse_count(text: str) -> int:
-    """互动数文本转 int（"1.2万" → 12000）。"""
-    text = (text or "").strip()
-    if not text:
-        return 0
-    try:
-        if text.endswith("万"):
-            return int(float(text[:-1]) * 10000)
-        if text.endswith("w"):
-            return int(float(text[:-1]) * 10000)
-        return int(re.sub(r"[^\d]", "", text) or 0)
-    except ValueError:
-        return 0
+def _json_list(items: list[str]) -> str:
+    import json
+
+    return json.dumps(items, ensure_ascii=False)
 
 
 async def _download_images(urls: list[str], xhs_note_id: str, limit: int = 3) -> list[str]:
@@ -91,7 +83,7 @@ async def _download_images(urls: list[str], xhs_note_id: str, limit: int = 3) ->
 
 def _extract_from_card(card) -> ScrapedNote:
     """从单个卡片 DOM 节点提取 ScrapedNote（选择器逐项容错，缺失字段置空）。"""
-    note = ScrapedNote()
+    note = ScrapedNote(source="browser")
     link = card.query_selector("a[href]")
     if link is not None:
         href = link.get_attribute("href") or ""
@@ -112,26 +104,115 @@ def _extract_from_card(card) -> ScrapedNote:
     return note
 
 
-async def collect_topic(topic: Topic, *, limit_multiplier: float = 2.0) -> int:
-    """执行一次话题采集（R05/R06）。
+# ────────────────────────── 入库（两通道共用） ──────────────────────────
+async def _save_notes(topic: Topic, scraped: list[ScrapedNote]) -> int:
+    """CollectedNote 入库（UNIQUE 防重采）+ 图片本地化，返回新增条数。"""
+    added = 0
+    with Session(get_engine()) as session:
+        for note in scraped:
+            exists = session.query(CollectedNote).filter_by(
+                account_id=topic.account_id, xhs_note_id=note.xhs_note_id
+            ).first()
+            if exists is not None:
+                continue
+            local_imgs = await _download_images(note.image_urls, note.xhs_note_id)
+            row = CollectedNote(
+                account_id=topic.account_id,
+                topic_id=topic.id,
+                xhs_note_id=note.xhs_note_id,
+                title=note.title[:200],
+                content=note.content,
+                author=note.author,
+                image_urls=_json_list(note.image_urls),
+                local_images=_json_list(local_imgs),
+                likes=note.likes,
+                collects=note.collects,
+                comments=note.comments,
+                status="collected",
+            )
+            session.add(row)
+            added += 1
+        session.commit()
+    logger.info("采集入库完成：topic=%s 解析=%s 新增=%s", topic.keyword, len(scraped), added)
+    return added
 
-    Args:
-        topic: Topic 行（须 enabled）。
-        limit_multiplier: 解析卡片数 = daily_quota * multiplier（给筛选留余量）。
 
-    Returns:
-        本次新增入库条数（重复采到的不计入）。
+# ────────────────────────── 通道模式读取 ──────────────────────────
+def get_read_mode() -> str:
+    """采集通道模式：AppSetting.collect_read_mode 优先，回退 yaml/默认 hybrid。"""
+    mode = None
+    with Session(get_engine()) as session:
+        mode = get_app_setting(session, "collect_read_mode", None)
+    if mode not in VALID_READ_MODES:
+        mode = get_settings().collect_read_mode
+    if mode not in VALID_READ_MODES:
+        mode = "hybrid"
+    return mode
+
+
+# ────────────────────────── API 直连通道 ──────────────────────────
+async def _collect_via_api(topic: Topic, limit: int) -> int:
+    """签名直连只读 API 采集（xhs_api 通道），返回新增入库条数。
 
     Raises:
-        EngineError: 浏览器/页面级失败（调用方捕获写 PipelineRun）。
+        ApiChannelError / NoCookieError：无 Cookie、风控、接口改版等（hybrid 由
+        collect_topic 捕获后回退浏览器；api 模式向上抛可见错误）。
     """
-    settings = get_settings()
-    limit = max(3, int(topic.daily_quota * limit_multiplier))
+    cookie_str, user_agent = await fetch_login_state()
+    channel = XhsApiChannel(
+        cookie_str=cookie_str,
+        user_agent=user_agent or DEFAULT_USER_AGENT,
+    )
+    scraped: list[ScrapedNote] = []
+    try:
+        page_size = 20
+        total_pages = max(1, math.ceil(limit / page_size))
+        for page in range(1, total_pages + 1):
+            if page > 1:
+                await channel.page_gap()  # 搜索翻页间隔 ≥10s + 抖动
+            batch = await channel.search_notes(topic.keyword, page=page, page_size=page_size)
+            if not batch:
+                break
+            scraped.extend(batch)
+        scraped = scraped[:limit]
+
+        # 补充正文与完整互动数（feed 详情）；单条失败用搜索卡片数据兜底，不阻塞整轮
+        enriched: list[ScrapedNote] = []
+        for note in scraped:
+            try:
+                detail = await channel.note_detail(note.xhs_note_id, note.xsec_token)
+                note.title = note.title or detail.title
+                note.content = detail.content
+                note.author = note.author or detail.author
+                note.likes = detail.likes or note.likes
+                note.collects = detail.collects
+                note.comments = detail.comments
+                if detail.image_urls:
+                    note.image_urls = detail.image_urls
+            except ApiChannelError as exc:
+                logger.warning(
+                    "API 详情获取失败（用搜索卡片数据兜底）：note=%s err=%s",
+                    note.xhs_note_id, exc,
+                )
+            if note.title:
+                enriched.append(note)
+        if not enriched:
+            raise ApiChannelError(
+                f"API 通道未解析到有效笔记（关键词：{topic.keyword}，可能风控或接口改版）"
+            )
+    finally:
+        await channel.aclose()
+    return await _save_notes(topic, enriched)
+
+
+# ────────────────────────── 浏览器通道 ──────────────────────────
+async def _collect_topic_browser(topic: Topic, limit: int) -> int:
+    """浏览器页面解析采集（原路径），返回新增入库条数。"""
     page = await acquire_page()
     scraped: list[ScrapedNote] = []
     try:
         url = SEARCH_URL.format(keyword=topic.keyword)
-        logger.info("采集开始：topic=%s url=%s limit=%s", topic.keyword, url, limit)
+        logger.info("采集开始（浏览器通道）：topic=%s url=%s limit=%s", topic.keyword, url, limit)
         await asyncio.to_thread(page.goto, url, None, "domcontentloaded")
         await asyncio.sleep(3)  # 等瀑布流首屏
 
@@ -171,42 +252,38 @@ async def collect_topic(topic: Topic, *, limit_multiplier: float = 2.0) -> int:
     finally:
         await release_page(page)
 
-    # 入库（UNIQUE 防重采）+ 图片本地化
-    added = 0
-    with Session(get_engine()) as session:
-        for note in scraped:
-            exists = session.query(CollectedNote).filter_by(
-                account_id=topic.account_id, xhs_note_id=note.xhs_note_id
-            ).first()
-            if exists is not None:
-                continue
-            local_imgs = await _download_images(note.image_urls, note.xhs_note_id)
-            row = CollectedNote(
-                account_id=topic.account_id,
-                topic_id=topic.id,
-                xhs_note_id=note.xhs_note_id,
-                title=note.title[:200],
-                content=note.content,
-                author=note.author,
-                image_urls=_json_list(note.image_urls),
-                local_images=_json_list(local_imgs),
-                likes=note.likes,
-                collects=note.collects,
-                comments=note.comments,
-                status="collected",
+    return await _save_notes(topic, scraped)
+
+
+# ────────────────────────── 对外入口（调度/流水线统一调用） ──────────────────────────
+async def collect_topic(topic: Topic, *, limit_multiplier: float = 2.0) -> int:
+    """执行一次话题采集（R05/R06，双通道调度）。
+
+    Args:
+        topic: Topic 行（须 enabled）。
+        limit_multiplier: 解析卡片数 = daily_quota * multiplier（给筛选留余量）。
+
+    Returns:
+        本次新增入库条数（重复采到的不计入）。
+
+    Raises:
+        EngineError: 所选通道失败且无法回退（api 模式 / browser 模式直抛）。
+    """
+    limit = max(3, int(topic.daily_quota * limit_multiplier))
+    mode = get_read_mode()
+
+    if mode in ("api", "hybrid"):
+        try:
+            added = await _collect_via_api(topic, limit)
+            logger.info("采集完成（API 直连）：topic=%s 新增=%s", topic.keyword, added)
+            return added
+        except ApiChannelError as exc:
+            if mode == "api":
+                raise EngineError(f"API 直连采集失败：{exc}") from exc
+            logger.warning(
+                "API 直连采集失败，自动回退浏览器通道：topic=%s err=%s", topic.keyword, exc
             )
-            session.add(row)
-            added += 1
-        session.commit()
-
-    logger.info("采集完成：topic=%s 解析=%s 新增=%s", topic.keyword, len(scraped), added)
-    return added
-
-
-def _json_list(items: list[str]) -> str:
-    import json
-
-    return json.dumps(items, ensure_ascii=False)
+    return await _collect_topic_browser(topic, limit=limit)
 
 
 async def check_note_detail_content(page, xhs_note_id: str) -> ScrapedNote:
@@ -215,7 +292,7 @@ async def check_note_detail_content(page, xhs_note_id: str) -> ScrapedNote:
     失败时返回仅含标题的 ScrapedNote（不阻塞采集主流程）。
     """
     url = f"https://www.xiaohongshu.com/explore/{xhs_note_id}"
-    note = ScrapedNote(xhs_note_id=xhs_note_id)
+    note = ScrapedNote(xhs_note_id=xhs_note_id, source="browser")
     try:
         await asyncio.to_thread(page.goto, url, None, "domcontentloaded")
         await asyncio.sleep(2)

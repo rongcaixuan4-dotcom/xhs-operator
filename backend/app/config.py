@@ -57,6 +57,9 @@ class Settings:
     headless: bool = False
     slow_mo_ms: int = 80
     nav_timeout_seconds: int = 30
+    # 采集读取通道：browser=仅浏览器 | api=仅签名直连 | hybrid=API 优先失败回退浏览器
+    # （AppSetting.collect_read_mode 优先级更高，此处为首次初始化默认值）
+    collect_read_mode: str = "hybrid"
     # 预留多账号
     current_account: int = 1
 
@@ -114,6 +117,11 @@ def _apply_yaml(s: Settings, data: dict) -> None:
 
     ac = data.get("accounts") or {}
     s.current_account = int(ac.get("current", s.current_account))
+
+    aps = data.get("app_settings") or {}
+    mode = str(aps.get("collect_read_mode", s.collect_read_mode)).lower()
+    if mode in ("browser", "api", "hybrid"):
+        s.collect_read_mode = mode
 
 
 def _apply_env(s: Settings) -> None:

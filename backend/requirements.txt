@@ -16,6 +16,8 @@ apscheduler>=3.10
 playwright>=1.44               # 需 playwright install chromium
 # HTTP / AI 适配
 httpx>=0.27
+# 小红书签名（公开开源库，仅用于只读 API 采集通道；写操作仍一律真浏览器）
+xhshow>=0.2
 # 图片处理
 pillow>=10.3
 # 配置与文档解析

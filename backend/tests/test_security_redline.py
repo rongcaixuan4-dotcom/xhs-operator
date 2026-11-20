@@ -1,7 +1,10 @@
 # -*- coding: utf-8 -*-
-"""安全红线静态复查（全项目约定）：不逆向签名 / 不导出 Cookie 直连写接口 / 发布一律真浏览器。
+"""安全红线静态复查（全项目约定）：写操作绝不经 API 直连 / 不自研签名逆向 / 发布一律真浏览器。
 
-作为 pytest 用例固化，防回归：后续提交若引入违规模式将直接测试失败。
+策略（v2，随 API 只读采集通道更新）：
+- 读操作：允许经公开开源签名库 xhshow 直连只读接口（engines/xhs_api.py，白名单管控）；
+- 写操作（发布/评论/点赞/收藏等）：**永久红线**，只走 Playwright 真浏览器；
+- 本文件为 pytest 用例固化，防回归：后续提交若引入违规模式将直接测试失败。
 """
 from __future__ import annotations
 
@@ -16,14 +19,23 @@ if str(BACKEND_DIR) not in sys.path:
 
 APP_DIR = BACKEND_DIR / "app"
 
-# 禁止出现的模式：签名逆向 / 内部签名算法 / Cookie 直连写接口痕迹
+# 变更类（写）接口黑名单：绝不允许出现在任何 app 源码中（含注释以外逻辑）
+XHS_WRITE_ENDPOINTS: tuple[str, ...] = (
+    "/api/sns/web/v1/note/post",
+    "/api/sns/web/v2/note/post",
+    "/api/sns/web/v1/comment/post",
+    "/api/sns/web/v2/comment/post",
+    "/api/sns/web/v1/note/like",
+    "/api/sns/web/v2/note/like",
+    "/api/sns/web/v1/note/collect",
+    "/api/sns/web/v2/note/collect",
+)
+
+# 禁止出现的模式：自研签名逆向痕迹 / Cookie 写操作痕迹
 FORBIDDEN_PATTERNS: list[tuple[str, str]] = [
-    ("签名头 x-s-common", r"x-s-common"),
-    ("签名头 X-s", r"[xX]-[sS]ign"),
-    ("本地签名函数", r"_webmsxyw|mn_qv|window\._webms|b1\s*=|compute.*xhs.*sign"),
-    ("XHS 内部写接口", r"/api/sns/web/v1/(note|comment|like|collect)"),
-    ("创作者中心私有接口", r"edith|web_api/sns|/web/creator"),
-    ("显式 Cookie 头直连", r"[cC]ookie\s*[:=]\s*['\"]web_session|set_cookie\("),
+    ("自研签名逆向实现", r"_webmsxyw|mn_qv|window\._webms|compute.*xhs.*sign"),
+    ("变更类（写）接口直连痕迹", r"/api/sns/web/[^\s'\"]*(post|put|delete)"),
+    ("显式 Cookie 写操作痕迹", r"set_cookie\("),
 ]
 
 
@@ -34,20 +46,30 @@ def iter_app_sources():
 class TestSecurityRedline(unittest.TestCase):
     """红线 grep 复查。"""
 
-    def test_no_signature_reverse_or_cookie_direct_write(self) -> None:
+    def test_no_signature_reverse_or_cookie_write(self) -> None:
         violations: list[str] = []
         for path in iter_app_sources():
             text = path.read_text(encoding="utf-8", errors="replace")
             # 排除合规声明行（"不逆向 X-Sign" 这类红线说明本身合法）
             code_lines = [
                 ln for ln in text.splitlines()
-                if not any(kw in ln for kw in ("不逆向", "禁止", "红线", "安全"))
+                if not any(kw in ln for kw in ("不逆向", "禁止", "红线", "安全", "只读"))
             ]
             code_text = "\n".join(code_lines)
             for label, pattern in FORBIDDEN_PATTERNS:
                 if re.search(pattern, code_text, flags=re.IGNORECASE):
                     violations.append(f"{path.name}: 命中 {label}（{pattern}）")
         self.assertEqual(violations, [], "安全红线违规：\n" + "\n".join(violations))
+
+    def test_no_xhs_write_endpoints_anywhere(self) -> None:
+        """变更类（写）接口黑名单逐字扫描：任何 app 源码不得出现。"""
+        violations: list[str] = []
+        for path in iter_app_sources():
+            text = path.read_text(encoding="utf-8", errors="replace")
+            for endpoint in XHS_WRITE_ENDPOINTS:
+                if endpoint in text:
+                    violations.append(f"{path.name}: 出现变更类接口 {endpoint}")
+        self.assertEqual(violations, [], "写操作红线违规：\n" + "\n".join(violations))
 
     def test_publish_engine_uses_real_browser(self) -> None:
         """发布引擎必须走 Playwright 真浏览器，禁止 httpx 直连提交。"""
@@ -58,7 +80,7 @@ class TestSecurityRedline(unittest.TestCase):
         self.assertRegex(publish_src, r"page\.query_selector")
 
     def test_collect_engine_uses_real_browser_for_content(self) -> None:
-        """采集正文必须走真浏览器 DOM；httpx 仅允许用于下载公开图片。"""
+        """浏览器通道正文必须走真浏览器 DOM；collect.py 的 httpx 仅允许下载公开图片。"""
         collect_src = (APP_DIR / "engines" / "collect.py").read_text(encoding="utf-8")
         self.assertIn("acquire_page", collect_src)
         httpx_usage = re.findall(r"async with httpx\.AsyncClient.*", collect_src)
@@ -74,6 +96,13 @@ class TestSecurityRedline(unittest.TestCase):
         for name in ("llm.py", "image.py"):
             src = (APP_DIR / "ai" / name).read_text(encoding="utf-8")
             self.assertNotIn("xiaohongshu", src, f"ai/{name} 不应出现小红书域名")
+
+    def test_xhs_api_channel_is_read_only(self) -> None:
+        """API 直连通道模块必须声明只读边界，且签名来自开源库 xhshow（非自研）。"""
+        src = (APP_DIR / "engines" / "xhs_api.py").read_text(encoding="utf-8")
+        self.assertIn("READ_ENDPOINTS", src, "应存在只读接口白名单")
+        self.assertIn("from xhshow import", src, "签名应来自开源库 xhshow")
+        self.assertIn("写操作永久红线", src, "应写明写操作红线声明")
 
 
 class TestAppStartupImport(unittest.TestCase):
