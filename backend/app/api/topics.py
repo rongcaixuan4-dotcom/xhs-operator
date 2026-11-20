@@ -22,6 +22,16 @@ router = APIRouter(prefix="/topics")
 TIME_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 
 
+def _reload_scheduler() -> None:
+    """话题变更后重载调度器的采集任务（失败仅记日志，不阻塞 API）。"""
+    try:
+        from ..scheduler import reload_topic_jobs
+
+        reload_topic_jobs()
+    except Exception:  # noqa: BLE001 - 调度器未启动（如测试环境）时跳过
+        logger.debug("调度器任务重载跳过（未启动）")
+
+
 def _dump(row: Topic) -> dict:
     return {
         "id": row.id,
@@ -87,6 +97,7 @@ async def create_topic(payload: TopicPayload, session: Session = Depends(get_ses
     session.add(row)
     session.commit()
     session.refresh(row)
+    _reload_scheduler()
     logger.info("话题已创建：id=%s keyword=%s", row.id, row.keyword)
     return ok(_dump(row), "话题已创建")
 
@@ -107,6 +118,7 @@ async def update_topic(topic_id: int, payload: TopicPayload, session: Session = 
     row.enabled = payload.enabled
     session.add(row)
     session.commit()
+    _reload_scheduler()
     logger.info("话题已更新：id=%s", topic_id)
     return ok(_dump(row), "话题已保存")
 
@@ -119,6 +131,7 @@ async def delete_topic(topic_id: int, session: Session = Depends(get_session)) -
         raise NotFoundError(f"话题不存在：{topic_id}")
     session.delete(row)
     session.commit()
+    _reload_scheduler()
     return ok({"id": topic_id}, "话题已删除")
 
 
