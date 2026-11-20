@@ -11,6 +11,14 @@ data/
 secrets*
 config.yaml
 
+# 日志
+logs/
+*.log
+
+# Playwright
+playwright-report/
+test-results/
+
 # 前端
 node_modules/
 dist/
