@@ -47,7 +47,7 @@ def parse_file(path: Path) -> str:
 def chunk_text(text: str, chunk_size: int = CHUNK_SIZE, overlap: int = OVERLAP) -> list[str]:
     """文本切片：段落优先，超长段落滑窗再切。"""
     chunks: list[str] = []
-    paragraphs = [p.strip() for p in re.split(r"\n\s*\n|(?m)^#{1,4}\s", text) if p.strip()]
+    paragraphs = [p.strip() for p in re.split(r"\n\s*\n|^#{1,4}\s", text, flags=re.M) if p.strip()]
     for para in paragraphs:
         if len(para) <= chunk_size:
             chunks.append(para)

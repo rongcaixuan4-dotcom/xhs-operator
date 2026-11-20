@@ -9,7 +9,7 @@ fastapi>=0.110
 uvicorn[standard]>=0.29
 python-multipart>=0.0.9        # 文件上传
 # 数据层
-sqlmodel>=0.0.16               # ORM + Pydantic
+sqlmodel>=0.0.16,<0.0.25      # ORM + Pydantic（锁定上限：0.0.25+ 会拒绝 sa_column_kwargs 的旧式 type_ 传参）
 # 调度
 apscheduler>=3.10
 # 浏览器自动化

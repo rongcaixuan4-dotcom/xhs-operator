@@ -68,7 +68,7 @@ class Settings:
     @property
     def frontend_dist(self) -> Path:
         """前端构建产物目录（vite build 输出位置）。"""
-        return BACKEND_DIR / "static"
+        return _BACKEND_DIR / "static"
 
     @property
     def frontend_src(self) -> Path:

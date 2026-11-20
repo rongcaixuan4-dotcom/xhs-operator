@@ -54,7 +54,9 @@ async def publish_task(task_id: int) -> str:
     Returns:
         最终状态：done | failed | queued(延时重试)。
     """
-    with Session(get_engine()) as session:
+    with Session(get_engine(), expire_on_commit=False) as session:
+        # expire_on_commit=False：commit 后 ORM 实例不失效，后续 _do_publish_flow
+        # 才能继续读取 task.publish_config_dict()/id/scheduled_at（QA BUG-3）
         task = session.get(PublishTask, task_id)
         if task is None:
             raise EngineError(f"发布任务不存在：{task_id}")

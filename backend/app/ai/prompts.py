@@ -42,7 +42,8 @@ def build_rewrite_messages(
     image_prompt 供生图二创使用（描述配图画面）。
     """
     system = (
-        "你是小红书资深内容创作者，正在为博主做人设化二创。\n"
+        "你是小红书资深内容创作者，正在为博主做人设化二创。\n\n"
+        "【人设】\n" + persona_text + "\n\n"
         "规则：\n"
         "1. 严格保持人设调性，符合目标人群的阅读习惯；\n"
         "2. 标题与文案必须是对原笔记的深度改写，不得照抄原句（与原文重复率须低于 70%）；\n"
@@ -53,7 +54,6 @@ def build_rewrite_messages(
         "7. 输出严格 JSON：{\"title\":\"...\",\"content\":\"...\",\"image_prompt\":\"...\"}"
     )
     user_parts = [
-        "【人设】\n" + persona_text,
         "【知识库参考】\n" + (knowledge_text or "（无命中知识，凭人设发挥）"),
     ]
     if review_text:
