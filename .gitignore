@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# 运行数据与密钥
+data/
+*.db
+.env
+secrets*
+config.yaml
+
+# 前端
+node_modules/
+dist/
+
+# 系统
+.DS_Store
+Thumbs.db
