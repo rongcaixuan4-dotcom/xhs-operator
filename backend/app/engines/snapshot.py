@@ -64,7 +64,7 @@ async def snapshot_daily(account_id: int = 1) -> dict:
                 )
             ).all()
 
-        await asyncio.to_thread(page.goto, NOTE_MANAGE_URL, None, "domcontentloaded")
+        await asyncio.to_thread(page.goto, NOTE_MANAGE_URL, wait_until="domcontentloaded")
         await asyncio.sleep(3)
         rows = await asyncio.to_thread(page.query_selector_all, NOTE_ROW_SELECTOR)
         stats_by_title: dict[str, tuple[int, int, int]] = {}
@@ -106,7 +106,7 @@ async def snapshot_daily(account_id: int = 1) -> dict:
 
         # ── 2) 账号级快照 ──
         try:
-            await asyncio.to_thread(page.goto, DATA_CENTER_URL, None, "domcontentloaded")
+            await asyncio.to_thread(page.goto, DATA_CENTER_URL, wait_until="domcontentloaded")
             await asyncio.sleep(3)
             body_text = await asyncio.to_thread(page.inner_text, "body")
             followers = _parse_count(_find_after(body_text, ["粉丝数", "粉丝"]))

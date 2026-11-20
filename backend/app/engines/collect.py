@@ -213,7 +213,7 @@ async def _collect_topic_browser(topic: Topic, limit: int) -> int:
     try:
         url = SEARCH_URL.format(keyword=topic.keyword)
         logger.info("采集开始（浏览器通道）：topic=%s url=%s limit=%s", topic.keyword, url, limit)
-        await asyncio.to_thread(page.goto, url, None, "domcontentloaded")
+        await asyncio.to_thread(page.goto, url, wait_until="domcontentloaded")
         await asyncio.sleep(3)  # 等瀑布流首屏
 
         # 滚动加载更多卡片
@@ -294,7 +294,7 @@ async def check_note_detail_content(page, xhs_note_id: str) -> ScrapedNote:
     url = f"https://www.xiaohongshu.com/explore/{xhs_note_id}"
     note = ScrapedNote(xhs_note_id=xhs_note_id, source="browser")
     try:
-        await asyncio.to_thread(page.goto, url, None, "domcontentloaded")
+        await asyncio.to_thread(page.goto, url, wait_until="domcontentloaded")
         await asyncio.sleep(2)
         content_el = await asyncio.to_thread(page.query_selector, "#detail-desc, .desc, .note-text")
         if content_el is not None:

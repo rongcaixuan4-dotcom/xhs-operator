@@ -140,7 +140,7 @@ async def _do_publish_flow(task: PublishTask, config: dict) -> _PublishOutcome:
     page = await acquire_page()
     title = str(config.get("title", ""))
     try:
-        await asyncio.to_thread(page.goto, PUBLISH_URL, None, "domcontentloaded")
+        await asyncio.to_thread(page.goto, PUBLISH_URL, wait_until="domcontentloaded")
         await asyncio.sleep(2)
 
         # 切到「上传图文」tab
@@ -263,7 +263,7 @@ class _VerifyResult:
 async def _verify_in_note_list(page, task: PublishTask, title: str) -> _VerifyResult:
     """打开笔记管理列表页核查标题存在（防重复发布的关键，架构 5.2）。"""
     try:
-        await asyncio.to_thread(page.goto, NOTE_MANAGE_URL, None, "domcontentloaded")
+        await asyncio.to_thread(page.goto, NOTE_MANAGE_URL, wait_until="domcontentloaded")
         await asyncio.sleep(3)
         # 列表项标题元素（宽松匹配）
         items = await asyncio.to_thread(
@@ -358,7 +358,7 @@ async def precheck() -> dict:
 
     page = await acquire_page()
     try:
-        await asyncio.to_thread(page.goto, PUBLISH_URL, None, "domcontentloaded")
+        await asyncio.to_thread(page.goto, PUBLISH_URL, wait_until="domcontentloaded")
         await asyncio.sleep(2)
         has_input = await asyncio.to_thread(page.query_selector, IMAGE_INPUT_SELECTOR) is not None
         has_btn = await asyncio.to_thread(page.query_selector, PUBLISH_BTN_SELECTOR) is not None
