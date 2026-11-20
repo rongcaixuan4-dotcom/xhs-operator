@@ -5,6 +5,7 @@ import Layout from './components/Layout.vue'
 import { store } from './store.js'
 
 import Dashboard from './pages/Dashboard.vue'
+import Account from './pages/Account.vue'
 import Personas from './pages/Personas.vue'
 import Knowledge from './pages/Knowledge.vue'
 import Collect from './pages/Collect.vue'
@@ -15,6 +16,7 @@ import Reports from './pages/Reports.vue'
 
 const pageMap = {
   dashboard: Dashboard,
+  account: Account,
   personas: Personas,
   knowledge: Knowledge,
   collect: Collect,

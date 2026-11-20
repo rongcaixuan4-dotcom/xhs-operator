@@ -28,7 +28,7 @@ from ..config import get_settings
 from ..db import get_app_setting, get_engine
 from ..errors import EngineError
 from ..models import CollectedNote, Topic
-from .browser import acquire_page, release_page, screenshot_async
+from .browser import acquire_page, bp_call, release_page, screenshot_async
 from .xhs_api import (
     ApiChannelError,
     DEFAULT_USER_AGENT,
@@ -213,15 +213,15 @@ async def _collect_topic_browser(topic: Topic, limit: int) -> int:
     try:
         url = SEARCH_URL.format(keyword=topic.keyword)
         logger.info("采集开始（浏览器通道）：topic=%s url=%s limit=%s", topic.keyword, url, limit)
-        await asyncio.to_thread(page.goto, url, wait_until="domcontentloaded")
+        await bp_call(page.goto, url, wait_until="domcontentloaded")
         await asyncio.sleep(3)  # 等瀑布流首屏
 
         # 滚动加载更多卡片
         for _ in range(3):
-            await asyncio.to_thread(page.mouse.wheel, 0, 2000)
+            await bp_call(page.mouse.wheel, 0, 2000)
             await asyncio.sleep(1.5)
 
-        cards = await asyncio.to_thread(page.query_selector_all, CARD_SELECTOR)
+        cards = await bp_call(page.query_selector_all, CARD_SELECTOR)
         if not cards:
             shot = await screenshot_async(page, f"collect_empty_{topic.id}")
             raise EngineError(
@@ -231,7 +231,7 @@ async def _collect_topic_browser(topic: Topic, limit: int) -> int:
 
         for card in cards[:limit]:
             try:
-                note = await asyncio.to_thread(_extract_from_card, card)
+                note = await bp_call(_extract_from_card, card)
             except Exception as exc:  # noqa: BLE001 - 单卡片解析失败不影响整轮
                 logger.warning("卡片解析失败（跳过）：%s", exc)
                 continue
@@ -294,11 +294,11 @@ async def check_note_detail_content(page, xhs_note_id: str) -> ScrapedNote:
     url = f"https://www.xiaohongshu.com/explore/{xhs_note_id}"
     note = ScrapedNote(xhs_note_id=xhs_note_id, source="browser")
     try:
-        await asyncio.to_thread(page.goto, url, wait_until="domcontentloaded")
+        await bp_call(page.goto, url, wait_until="domcontentloaded")
         await asyncio.sleep(2)
-        content_el = await asyncio.to_thread(page.query_selector, "#detail-desc, .desc, .note-text")
+        content_el = await bp_call(page.query_selector, "#detail-desc, .desc, .note-text")
         if content_el is not None:
-            note.content = (await asyncio.to_thread(content_el.inner_text)).strip()
+            note.content = (await bp_call(content_el.inner_text)).strip()
     except Exception as exc:  # noqa: BLE001
         logger.warning("详情页正文获取失败：note=%s err=%s", xhs_note_id, exc)
     return note

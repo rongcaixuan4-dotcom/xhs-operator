@@ -35,6 +35,7 @@ export const store = reactive({
 
 export const NAV_ITEMS = [
   { key: 'dashboard', label: '工作台', icon: '📊' },
+  { key: 'account', label: '账号登录', icon: '🔑' },
   { key: 'personas', label: '人设管理', icon: '👤' },
   { key: 'knowledge', label: '知识库', icon: '📚' },
   { key: 'collect', label: '采集与选题', icon: '🔍' },

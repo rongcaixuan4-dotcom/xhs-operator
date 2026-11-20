@@ -24,7 +24,7 @@ from ..config import get_settings
 from ..db import get_engine
 from ..errors import EngineError, VerifyError
 from ..models import PublishTask
-from .browser import XHS_CREATOR, acquire_page, release_page, screenshot_async
+from .browser import XHS_CREATOR, acquire_page, bp_call, release_page, screenshot_async
 
 logger = logging.getLogger("app.engines.publish")
 
@@ -140,21 +140,21 @@ async def _do_publish_flow(task: PublishTask, config: dict) -> _PublishOutcome:
     page = await acquire_page()
     title = str(config.get("title", ""))
     try:
-        await asyncio.to_thread(page.goto, PUBLISH_URL, wait_until="domcontentloaded")
+        await bp_call(page.goto, PUBLISH_URL, wait_until="domcontentloaded")
         await asyncio.sleep(2)
 
         # 切到「上传图文」tab
-        tab = await asyncio.to_thread(page.query_selector, TAB_IMAGE_SELECTOR)
+        tab = await bp_call(page.query_selector, TAB_IMAGE_SELECTOR)
         if tab is not None:
-            await asyncio.to_thread(tab.click)
+            await bp_call(tab.click)
             await asyncio.sleep(1)
 
         # 上传图片（含封面：封面排首位）
-        image_input = await asyncio.to_thread(page.query_selector, IMAGE_INPUT_SELECTOR)
+        image_input = await bp_call(page.query_selector, IMAGE_INPUT_SELECTOR)
         image_paths = [str(p) for p in _resolve_local_images(config)]
         if image_input is not None and image_paths:
-            await asyncio.to_thread(
-                image_input.set_input_files, image_paths, None
+            await bp_call(
+                image_input.set_input_files, image_paths
             )
             await asyncio.sleep(3)  # 等上传完成（多图）
             logger.info("图片已上传：task=%s count=%s", task.id, len(image_paths))
@@ -165,19 +165,19 @@ async def _do_publish_flow(task: PublishTask, config: dict) -> _PublishOutcome:
             return _PublishOutcome("retry", error=f"未找到图片上传控件（页面改版？）screenshot={shot}")
 
         # 标题
-        title_input = await asyncio.to_thread(page.query_selector, TITLE_INPUT_SELECTOR)
+        title_input = await bp_call(page.query_selector, TITLE_INPUT_SELECTOR)
         if title_input is None:
             shot = await screenshot_async(page, f"publish_no_title_{task.id}")
             return _PublishOutcome("retry", error=f"未找到标题输入框 screenshot={shot}")
-        await asyncio.to_thread(title_input.fill, title)
+        await bp_call(title_input.fill, title)
 
         # 正文
-        editor = await asyncio.to_thread(page.query_selector, CONTENT_EDITOR_SELECTOR)
+        editor = await bp_call(page.query_selector, CONTENT_EDITOR_SELECTOR)
         if editor is None:
             shot = await screenshot_async(page, f"publish_no_editor_{task.id}")
             return _PublishOutcome("retry", error=f"未找到正文编辑器 screenshot={shot}")
-        await asyncio.to_thread(editor.click)
-        await asyncio.to_thread(editor.type, str(config.get("content", "")))
+        await bp_call(editor.click)
+        await bp_call(editor.type, str(config.get("content", "")))
 
         # 话题标签（多选，逐个搜索添加）
         for tag in config.get("topics") or []:
@@ -186,15 +186,15 @@ async def _do_publish_flow(task: PublishTask, config: dict) -> _PublishOutcome:
         # 位置
         location = str(config.get("location") or "")
         if location:
-            loc_input = await asyncio.to_thread(page.query_selector, LOCATION_INPUT_SELECTOR)
+            loc_input = await bp_call(page.query_selector, LOCATION_INPUT_SELECTOR)
             if loc_input is not None:
-                await asyncio.to_thread(loc_input.fill, location)
+                await bp_call(loc_input.fill, location)
 
         # 声明来源
         if config.get("source_declare"):
-            declare = await asyncio.to_thread(page.query_selector, DECLARE_CHECKBOX_SELECTOR)
+            declare = await bp_call(page.query_selector, DECLARE_CHECKBOX_SELECTOR)
             if declare is not None:
-                await asyncio.to_thread(declare.check)
+                await bp_call(declare.check)
 
         # 定时发布
         scheduled = task.scheduled_at
@@ -205,16 +205,16 @@ async def _do_publish_flow(task: PublishTask, config: dict) -> _PublishOutcome:
         await _fill_optional(page, config, task.id)
 
         # ── 提交 ──
-        btn = await asyncio.to_thread(page.query_selector, PUBLISH_BTN_SELECTOR)
+        btn = await bp_call(page.query_selector, PUBLISH_BTN_SELECTOR)
         if btn is None:
             shot = await screenshot_async(page, f"publish_no_btn_{task.id}")
             return _PublishOutcome("retry", error=f"未找到发布按钮 screenshot={shot}")
-        await asyncio.to_thread(btn.click)
+        await bp_call(btn.click)
         await asyncio.sleep(3)
 
         # ── 结果判定 ──
-        success_el = await asyncio.to_thread(page.query_selector, SUCCESS_HINT_SELECTOR)
-        error_el = await asyncio.to_thread(page.query_selector, ERROR_HINT_SELECTOR)
+        success_el = await bp_call(page.query_selector, SUCCESS_HINT_SELECTOR)
+        error_el = await bp_call(page.query_selector, ERROR_HINT_SELECTOR)
         if success_el is not None and error_el is None:
             # 明确成功 → verifying → 核查内容一致
             task.status = "verifying"
@@ -263,19 +263,19 @@ class _VerifyResult:
 async def _verify_in_note_list(page, task: PublishTask, title: str) -> _VerifyResult:
     """打开笔记管理列表页核查标题存在（防重复发布的关键，架构 5.2）。"""
     try:
-        await asyncio.to_thread(page.goto, NOTE_MANAGE_URL, wait_until="domcontentloaded")
+        await bp_call(page.goto, NOTE_MANAGE_URL, wait_until="domcontentloaded")
         await asyncio.sleep(3)
         # 列表项标题元素（宽松匹配）
-        items = await asyncio.to_thread(
+        items = await bp_call(
             page.query_selector_all, ".note-item .title, table tbody tr, .video-info .title"
         )
         for item in items[:30]:
             try:
-                text = (await asyncio.to_thread(item.inner_text)).strip()
+                text = (await bp_call(item.inner_text)).strip()
             except Exception:  # noqa: BLE001
                 continue
             if title[:12] in text:
-                link = await asyncio.to_thread(item.query_selector, "a[href]")
+                link = await bp_call(item.query_selector, "a[href]")
                 href = link.get_attribute("href") if link is not None else ""
                 note_id = ""
                 if href and "/explore/" in str(href):
@@ -291,15 +291,15 @@ async def _verify_in_note_list(page, task: PublishTask, title: str) -> _VerifyRe
 async def _fill_topic(page, tag: str) -> None:
     """话题标签逐个搜索添加（失败仅记日志，不阻塞发布）。"""
     try:
-        inp = await asyncio.to_thread(page.query_selector, TOPIC_INPUT_SELECTOR)
+        inp = await bp_call(page.query_selector, TOPIC_INPUT_SELECTOR)
         if inp is None:
             return
-        await asyncio.to_thread(inp.click)
-        await asyncio.to_thread(inp.type, tag)
+        await bp_call(inp.click)
+        await bp_call(inp.type, tag)
         await asyncio.sleep(1)
-        sug = await asyncio.to_thread(page.query_selector, TOPIC_SUGGEST_SELECTOR)
+        sug = await bp_call(page.query_selector, TOPIC_SUGGEST_SELECTOR)
         if sug is not None:
-            await asyncio.to_thread(sug.click)
+            await bp_call(sug.click)
         await asyncio.sleep(0.5)
     except Exception as exc:  # noqa: BLE001
         logger.warning("话题填写失败（跳过）：tag=%s err=%s", tag, exc)
@@ -308,14 +308,14 @@ async def _fill_topic(page, tag: str) -> None:
 async def _fill_schedule(page, task_id: int, scheduled) -> None:
     """定时发布开关与时间填写。"""
     try:
-        switch = await asyncio.to_thread(page.query_selector, SCHEDULE_SWITCH_SELECTOR)
+        switch = await bp_call(page.query_selector, SCHEDULE_SWITCH_SELECTOR)
         if switch is not None:
-            await asyncio.to_thread(switch.click)
+            await bp_call(switch.click)
             await asyncio.sleep(0.5)
-        time_input = await asyncio.to_thread(page.query_selector, SCHEDULE_TIME_INPUT_SELECTOR)
+        time_input = await bp_call(page.query_selector, SCHEDULE_TIME_INPUT_SELECTOR)
         if time_input is not None:
-            await asyncio.to_thread(time_input.fill, scheduled.strftime("%Y-%m-%d %H:%M"))
-            await asyncio.to_thread(time_input.press, "Enter")
+            await bp_call(time_input.fill, scheduled.strftime("%Y-%m-%d %H:%M"))
+            await bp_call(time_input.press, "Enter")
         logger.info("定时发布已设置：task=%s at=%s", task_id, scheduled)
     except Exception as exc:  # noqa: BLE001
         logger.warning("定时设置失败（改为立即发布语义）：%s", exc)
@@ -358,10 +358,10 @@ async def precheck() -> dict:
 
     page = await acquire_page()
     try:
-        await asyncio.to_thread(page.goto, PUBLISH_URL, wait_until="domcontentloaded")
+        await bp_call(page.goto, PUBLISH_URL, wait_until="domcontentloaded")
         await asyncio.sleep(2)
-        has_input = await asyncio.to_thread(page.query_selector, IMAGE_INPUT_SELECTOR) is not None
-        has_btn = await asyncio.to_thread(page.query_selector, PUBLISH_BTN_SELECTOR) is not None
+        has_input = await bp_call(page.query_selector, IMAGE_INPUT_SELECTOR) is not None
+        has_btn = await bp_call(page.query_selector, PUBLISH_BTN_SELECTOR) is not None
         shot = await screenshot_async(page, "precheck")
         reachable = has_input and has_btn
         return {

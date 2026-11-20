@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import queue as _queue
 import threading
 import time
 from typing import Optional
@@ -52,7 +53,41 @@ class BrowserManager:
         self._playwright = None          # sync_playwright 句柄
         self._context = None             # persistent context
         self._thread_lock = threading.Lock()  # 保护 _context 惰性创建
+        self._login_page = None          # 交互式扫码登录专用页（保持打开）
         self._account_id = 1             # MVP 单账号（D2）；P1 扩展为多 profile
+        # sync Playwright 线程亲和：所有调用必须落在唯一工作线程（见 _worker_loop）
+        self._task_q: "_queue.Queue" = _queue.Queue()
+        self._worker: Optional[threading.Thread] = None
+
+    # ── 专用工作线程（sync Playwright 线程亲和的解决方案） ──
+    def _worker_loop(self) -> None:
+        """唯一执行 Playwright 调用的线程：串行消费任务队列，永不退出。"""
+        while True:
+            fn, args, kwargs, reply = self._task_q.get()
+            try:
+                reply.put((True, fn(*args, **kwargs)))
+            except BaseException as exc:  # noqa: BLE001 - 异常原样回传给等待方
+                reply.put((False, exc))
+
+    def _ensure_worker(self) -> None:
+        """惰性启动工作线程（线程安全）。"""
+        with self._thread_lock:
+            if self._worker is None or not self._worker.is_alive():
+                self._worker = threading.Thread(
+                    target=self._worker_loop, daemon=True, name="playwright-worker",
+                )
+                self._worker.start()
+                logger.info("Playwright 专用工作线程已启动")
+
+    def submit(self, fn, *args, **kwargs):
+        """在专用工作线程上串行执行 fn（阻塞直到完成，禁止在工作线程内调用）。"""
+        self._ensure_worker()
+        reply: "_queue.Queue" = _queue.Queue()
+        self._task_q.put((fn, args, kwargs, reply))
+        done, val = reply.get()
+        if not done:
+            raise val
+        return val
 
     # ── 生命周期 ──
     def _ensure_context(self):
@@ -94,6 +129,8 @@ class BrowserManager:
                 except Exception:  # noqa: BLE001 - 退出清理失败仅记日志
                     logger.exception("浏览器关闭异常")
                 self._context = None
+            if self._login_page is not None:
+                self._login_page = None
             if self._playwright is not None:
                 try:
                     self._playwright.stop()
@@ -116,6 +153,37 @@ class BrowserManager:
             page.close()
         except Exception:  # noqa: BLE001
             logger.exception("页面关闭异常（忽略）")
+
+    # ── 交互式扫码登录 ──
+    def open_interactive_login(self) -> str:
+        """打开专用页面到小红书首页供人工扫码（sync，须在线程中调用）。
+
+        页面保持打开（不进租借池、不自动关闭），扫码后登录态写入 persistent
+        profile 长期有效。重复调用会复用已开的登录页并前置窗口。
+        """
+        context = self._ensure_context()
+        if self._login_page is not None:
+            try:
+                self._login_page.goto(XHS_HOME, wait_until="domcontentloaded")
+                self._login_page.bring_to_front()
+                return "登录窗口已存在，已前置并回到小红书首页；请在窗口内扫码"
+            except Exception:  # noqa: BLE001 - 旧页面可能已被人工关闭
+                self._login_page = None
+        self._login_page = context.new_page()
+        self._login_page.goto(XHS_HOME, wait_until="domcontentloaded")
+        self._login_page.bring_to_front()
+        logger.info("交互式登录页已打开（保持常驻，等待人工扫码）")
+        return "浏览器窗口已打开小红书首页：请点击页面右上角「登录」，用小红书 App 扫码确认；登录态会长期保存，无需重复登录"
+
+    def close_interactive_login(self) -> None:
+        """关闭交互式登录页（登录态已存 profile，关闭不影响已登录状态）。"""
+        if self._login_page is not None:
+            try:
+                self._login_page.close()
+            except Exception:  # noqa: BLE001
+                logger.exception("登录页关闭异常（忽略）")
+            self._login_page = None
+            logger.info("交互式登录页已关闭")
 
     # ── 登录态检查 ──
     def check_login(self) -> tuple[bool, str]:
@@ -197,26 +265,46 @@ def get_browser_manager() -> BrowserManager:
     return _manager
 
 
+async def bp_call(fn, *args, **kwargs):
+    """引擎层统一入口：把任意 Playwright 对象调用派发到专用工作线程。
+
+    sync Playwright 有线程亲和（greenlet 绑定创建线程），跨线程调用会
+    TargetClosedError——所以**所有** Playwright 调用（含 page.goto/fill 等
+    页面对象方法）都必须经此函数，禁止直接 asyncio.to_thread。
+    """
+    return await asyncio.to_thread(get_browser_manager().submit, fn, *args, **kwargs)
+
+
 async def acquire_page():
-    """异步租借页面（asyncio.to_thread 包装 sync API）。"""
-    return await asyncio.to_thread(get_browser_manager().acquire_page)
+    """异步租借页面（经专用工作线程）。"""
+    return await bp_call(get_browser_manager().acquire_page)
 
 
 async def release_page(page) -> None:
     """异步归还页面。"""
-    await asyncio.to_thread(get_browser_manager().release_page, page)
+    await bp_call(get_browser_manager().release_page, page)
 
 
 async def check_login_async() -> tuple[bool, str]:
     """异步登录态检查。"""
-    return await asyncio.to_thread(get_browser_manager().check_login)
+    return await bp_call(get_browser_manager().check_login)
 
 
 async def export_login_state_async() -> tuple[str, str]:
     """异步导出小红书 Cookie 串与 UA（API 只读通道专用）。"""
-    return await asyncio.to_thread(get_browser_manager().export_login_state)
+    return await bp_call(get_browser_manager().export_login_state)
+
+
+async def open_interactive_login_async() -> str:
+    """异步打开交互式扫码登录页。"""
+    return await bp_call(get_browser_manager().open_interactive_login)
+
+
+async def close_interactive_login_async() -> None:
+    """异步关闭交互式登录页。"""
+    await bp_call(get_browser_manager().close_interactive_login)
 
 
 async def screenshot_async(page, name: str) -> str:
     """异步截图留痕。"""
-    return await asyncio.to_thread(get_browser_manager().screenshot, page, name)
+    return await bp_call(get_browser_manager().screenshot, page, name)

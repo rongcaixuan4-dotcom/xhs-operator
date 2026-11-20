@@ -17,7 +17,7 @@ from sqlmodel import Session, select
 from ..db import get_engine
 from ..errors import EngineError
 from ..models import AccountSnapshot, NoteStatSnapshot, PublishTask
-from .browser import XHS_CREATOR, acquire_page, release_page, screenshot_async
+from .browser import XHS_CREATOR, acquire_page, bp_call, release_page, screenshot_async
 
 logger = logging.getLogger("app.engines.snapshot")
 
@@ -64,13 +64,13 @@ async def snapshot_daily(account_id: int = 1) -> dict:
                 )
             ).all()
 
-        await asyncio.to_thread(page.goto, NOTE_MANAGE_URL, wait_until="domcontentloaded")
+        await bp_call(page.goto, NOTE_MANAGE_URL, wait_until="domcontentloaded")
         await asyncio.sleep(3)
-        rows = await asyncio.to_thread(page.query_selector_all, NOTE_ROW_SELECTOR)
+        rows = await bp_call(page.query_selector_all, NOTE_ROW_SELECTOR)
         stats_by_title: dict[str, tuple[int, int, int]] = {}
         for row in rows[:50]:
             try:
-                text = await asyncio.to_thread(row.inner_text)
+                text = await bp_call(row.inner_text)
                 cells = [c.strip() for c in text.split("\n") if c.strip()]
                 if len(cells) < 2:
                     continue
@@ -106,9 +106,9 @@ async def snapshot_daily(account_id: int = 1) -> dict:
 
         # ── 2) 账号级快照 ──
         try:
-            await asyncio.to_thread(page.goto, DATA_CENTER_URL, wait_until="domcontentloaded")
+            await bp_call(page.goto, DATA_CENTER_URL, wait_until="domcontentloaded")
             await asyncio.sleep(3)
-            body_text = await asyncio.to_thread(page.inner_text, "body")
+            body_text = await bp_call(page.inner_text, "body")
             followers = _parse_count(_find_after(body_text, ["粉丝数", "粉丝"]))
             week_exposure = _find_after(body_text, ["曝光", "浏览量"])
             week_interaction = _find_after(body_text, ["互动"])
