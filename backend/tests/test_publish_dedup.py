@@ -20,7 +20,8 @@ BACKEND_DIR = Path(__file__).resolve().parents[1]
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
-from app.db import init_db, get_engine, get_session  # noqa: E402
+from app.db import init_db, get_engine  # noqa: E402
+from sqlmodel import Session  # noqa: E402
 from app.models import CreationDraft, PublishTask  # noqa: E402
 from app.services.review import (  # noqa: E402
     compute_dedup_hash,
@@ -62,7 +63,7 @@ class TestDuplicateTaskRejected(unittest.TestCase):
         img.write_bytes(b"IMG2")
         rel = img.relative_to(BACKEND_DIR.parent).as_posix()
 
-        with get_session() as session:
+        with Session(get_engine()) as session:
             draft = CreationDraft(
                 account_id=1,
                 title="防重测试标题",
@@ -97,7 +98,7 @@ class TestDuplicateTaskRejected(unittest.TestCase):
 
     def test_review_default_on(self) -> None:
         """D6：review_required 默认 true。"""
-        with get_session() as session:
+        with Session(get_engine()) as session:
             self.assertTrue(is_review_required(session, 1))
 
 
@@ -118,7 +119,7 @@ class TestPublishOutcomePaths(unittest.TestCase):
         from app.engines.publish import _PublishOutcome, publish_task
 
         init_db()
-        with get_session() as session:
+        with Session(get_engine()) as session:
             session.add(self._make_task_row())
             session.commit()
             task_id = session.exec(_select(PublishTask)).all()[-1].id
@@ -133,7 +134,7 @@ class TestPublishOutcomePaths(unittest.TestCase):
 
         final = asyncio.run(run())
         self.assertEqual(final, "done")
-        with get_session() as session:
+        with Session(get_engine()) as session:
             row = session.get(PublishTask, task_id)
             self.assertEqual(row.status, "done")
             self.assertEqual(row.retry_count, 0)
@@ -143,7 +144,7 @@ class TestPublishOutcomePaths(unittest.TestCase):
         from app.engines.publish import _PublishOutcome, publish_task
 
         init_db()
-        with get_session() as session:
+        with Session(get_engine()) as session:
             row = self._make_task_row()
             row.retry_count = 2  # 再失败一次即耗尽（MAX_RETRY=3）
             session.add(row)
@@ -160,7 +161,7 @@ class TestPublishOutcomePaths(unittest.TestCase):
 
         final = asyncio.run(run())
         self.assertEqual(final, "failed")
-        with get_session() as session:
+        with Session(get_engine()) as session:
             row = session.get(PublishTask, task_id)
             self.assertEqual(row.status, "failed")
             self.assertIn("重试耗尽", row.last_error)
