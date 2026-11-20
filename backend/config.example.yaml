@@ -1,0 +1,39 @@
+# ============================================================
+# 「XHS 运营助手」服务器级配置模板
+# 使用：复制本文件为 backend/config.yaml 后按需修改。
+# 注意：AI 配置（base_url/api_key/model）不走本文件，
+#       存在 ai_config 表中，在工作台「设置」页维护。
+#       环境变量 XHS_* 可覆盖下列同名项（如 XHS_PORT）。
+# ============================================================
+
+server:
+  host: "127.0.0.1"        # 监听地址：本机使用，不对外网开放
+  port: 8787               # 后端端口，与 frontend/vite.config.js 代理一致
+
+data:
+  dir: "./data"            # 数据根目录（数据库/图片/截图/浏览器 profile 均在其下）
+  profiles_dir: "./data/profiles"   # Playwright persistent context 目录，每账号一个子目录（预留多账号）
+  collected_dir: "./data/collected"  # 采集原图
+  creations_dir: "./data/creations"  # 二创图片
+  screenshots_dir: "./data/screenshots"  # 浏览器失败截图留痕
+
+logging:
+  level: "INFO"            # DEBUG / INFO / WARNING
+  dir: "./logs"            # 日志目录，RotatingFileHandler 5MB x 5
+
+pipeline:
+  daily_run_time: "08:00"          # 每日流水线默认触发时刻（话题自身的 collect_times 另行触发采集）
+  snapshot_interval_minutes: 60    # 数据快照间隔
+  weekly_report_day: "mon"         # 每周复盘触发日
+  weekly_report_time: "09:00"      # 每周复盘触发时刻
+  publish_scan_interval_minutes: 10  # 发布任务到点扫描间隔
+  retry_scan_interval_minutes: 30    # 失败重试扫描间隔
+
+browser:
+  headless: false          # 小红书风控敏感，默认有头浏览器
+  slow_mo_ms: 80           # 页面操作间隔（ms），降低风控风险
+  nav_timeout_seconds: 30  # 页面导航超时
+
+# ── 预留：P1 多账号（MVP 只用 account_1） ──
+accounts:
+  current: 1               # 当前生效账号 id，同时写入 AppSetting.current_account_id

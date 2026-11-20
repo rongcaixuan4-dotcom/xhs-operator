@@ -1,0 +1,25 @@
+# ============================================================
+# 「XHS 运营助手」后端依赖清单（架构设计第 7 节）
+# 安装：pip install -r backend/requirements.txt
+# 浏览器内核另需：playwright install chromium
+# ============================================================
+
+# Web 框架与服务器
+fastapi>=0.110
+uvicorn[standard]>=0.29
+python-multipart>=0.0.9        # 文件上传
+# 数据层
+sqlmodel>=0.0.16               # ORM + Pydantic
+# 调度
+apscheduler>=3.10
+# 浏览器自动化
+playwright>=1.44               # 需 playwright install chromium
+# HTTP / AI 适配
+httpx>=0.27
+# 图片处理
+pillow>=10.3
+# 配置与文档解析
+pyyaml>=6.0
+python-docx>=1.1               # 知识库 docx 导入
+# 可选
+openpyxl>=3.1                  # 数据导出 Excel(P2 预留)

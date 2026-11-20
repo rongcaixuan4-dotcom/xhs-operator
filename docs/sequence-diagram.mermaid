@@ -1,0 +1,72 @@
+sequenceDiagram
+    participant S as Scheduler(APScheduler)
+    participant P as PipelineService
+    participant C as CollectEngine
+    participant SC as ScoringService
+    participant CR as CreationEngine
+    participant RV as ReviewService
+    participant PB as PublishEngine
+    participant SN as SnapshotEngine
+    participant DB as SQLite
+    participant AI as AI适配层
+
+    S->>P: run_daily_pipeline(account_id=1)（定时/手动触发）
+    P->>DB: upsert PipelineRun(run_date=today, stage=monitoring)
+    loop 每个启用话题(时段触发)
+        P->>C: collect_topic(topic, quota)
+        C->>C: BrowserManager.acquire() 打开搜索结果页
+        C->>DB: CollectedNote 入库(UNIQUE 防重采) + 下载图片
+        C-->>P: 新增条数
+    end
+    P->>SC: select_today_notes()
+    SC->>SC: 人设匹配 + 知识库关键词加分 + 互动数加权
+    SC->>DB: CollectedNote.status=selected (≥3 篇)
+    P->>DB: stage=creating
+    loop 每篇 selected
+        P->>CR: create_draft(note)
+        CR->>AI: llm.chat(二创提示词=人设+检索知识切片)
+        CR->>AI: image.generate/edit(双路由,失败交叉降级)
+        CR->>DB: CreationDraft(status=pending_review)
+    end
+    P->>RV: settle_review(drafts)
+    alt review_required=false
+        RV->>DB: drafts.status=queued → PublishTask(queued, scheduled_at)
+    else review_required=true
+        RV->>DB: 保持 pending_review,等待人工 API
+    end
+    P->>DB: stage=publishing
+    loop 到达排期的 PublishTask
+        P->>PB: publish_task(task)
+        PB->>DB: 核查通过后 done（详见 5.2）
+    end
+    P->>SN: snapshot_daily()
+    SN->>DB: NoteStatSnapshot + AccountSnapshot（每日 ≥1 条/篇）
+    P->>DB: stage=done, status=ok（任一环节异常: 该环节 status=error 入 detail, 继续下一环节, 不阻塞后续天次）
+
+
+sequenceDiagram
+    participant P as PipelineService
+    participant PB as PublishEngine
+    participant BM as BrowserManager
+    participant BR as 浏览器(创作者中心)
+    participant DB as SQLite
+
+    P->>PB: publish_task(task)
+    PB->>DB: 查 dedup_hash 是否已存在 done 任务 → 命中则拒绝并告警, 返回
+    PB->>BM: acquire(profile=account_1)
+    BM->>BR: persistent context 打开 creator.xiaohongshu.com
+    PB->>BR: 检查登录态(失败→告警"需人工扫码", task 保持 queued)
+    PB->>BR: 进入发布页, 逐一填写: 标题/正文/上传图片(含封面)/话题/位置/声明来源/合集/@好友/定时
+    PB->>BR: 点击发布(或确认定时)
+    BR-->>PB: 页面反馈(成功/不确定/失败)
+    alt 反馈不明确或失败但可能已提交
+        PB->>BR: 打开笔记管理列表页核查
+        BR-->>PB: 列表含该标题/封面 → 已发布
+        PB->>DB: task.status=done, published_at=now, 记录 note_url
+        PB->>DB: VerifyError 告警写入 detail(内容一致性比对)
+    else 明确成功
+        PB->>DB: task.status=verifying → 核查内容一致 → done
+    else 明确失败(未提交)
+        PB->>DB: retry_count+1, ≤3 则回 queued 延时重试; 耗尽/风控拦截 → failed + 告警入 Dashboard
+    end
+    PB->>BM: release(page)（浏览器进程复用, 不销毁 profile）

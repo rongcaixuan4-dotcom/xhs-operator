@@ -1,0 +1,131 @@
+classDiagram
+    class Persona {
+        +int id
+        +int account_id
+        +str name
+        +str nickname
+        +str positioning
+        +str style_tags_json
+        +str audience
+        +str taboo_words_json
+        +str sample_notes_json
+        +bool is_active
+        +datetime updated_at
+    }
+    class KnowledgeChunk {
+        +int id
+        +int account_id
+        +str source_type  %% experience|review|negative
+        +str source_title
+        +str content
+        +int char_count
+        +bool enabled
+    }
+    class Topic {
+        +int id
+        +int account_id
+        +str keyword
+        +float priority_weight
+        +int daily_quota
+        +str collect_times_json
+        +bool enabled
+    }
+    class CollectedNote {
+        +int id
+        +int account_id
+        +int topic_id
+        +str xhs_note_id
+        +str title
+        +str content
+        +str author
+        +str image_urls_json
+        +str local_images_json
+        +int likes
+        +int collects
+        +int comments
+        +float match_score
+        +str status  %% collected|selected|discarded
+    }
+    class CreationDraft {
+        +int id
+        +int account_id
+        +int collected_note_id
+        +int persona_id
+        +str title
+        +str content
+        +str image_paths_json
+        +str cover_path
+        +float similarity_score
+        +str status  %% generating|pending_review|approved|rejected|queued
+        +str reject_reason
+    }
+    class PublishTask {
+        +int id
+        +int account_id
+        +int draft_id
+        +str status  %% queued|publishing|verifying|done|failed|canceled
+        +datetime scheduled_at
+        +datetime published_at
+        +str publish_config_json
+        +str dedup_hash
+        +str note_url
+        +int retry_count
+        +str last_error
+    }
+    class NoteStatSnapshot {
+        +int id
+        +int account_id
+        +int publish_task_id
+        +str xhs_note_id
+        +int exposure
+        +int likes
+        +int collects
+        +int comments
+        +datetime captured_at
+    }
+    class AccountSnapshot {
+        +int id
+        +int account_id
+        +int followers
+        +int week_exposure
+        +int week_interaction
+        +datetime captured_at
+    }
+    class WeeklyReport {
+        +int id
+        +int account_id
+        +date week_start
+        +date week_end
+        +str report_md
+        +str insights_json
+        +str status  %% pending_confirm|confirmed|expired
+    }
+    class PipelineRun {
+        +int id
+        +int account_id
+        +date run_date
+        +str stage
+        +str status
+        +str detail_json
+    }
+    class AiConfig {
+        +int id
+        +int account_id
+        +str kind  %% llm|image
+        +str base_url
+        +str api_key
+        +str model
+        +str extra_json
+        +bool enabled
+    }
+    class AppSetting {
+        +str key  %% PK
+        +str value_json
+    }
+
+    Persona "1" --> "0..*" CreationDraft : 驱动二创
+    CollectedNote "1" --> "0..*" CreationDraft : 二创来源
+    Topic "1" --> "0..*" CollectedNote : 采集归属
+    CreationDraft "1" --> "0..1" PublishTask : 排期发布
+    PublishTask "1" --> "0..*" NoteStatSnapshot : 数据快照
+    WeeklyReport --> KnowledgeChunk : 确认后写入(source_type=review)
